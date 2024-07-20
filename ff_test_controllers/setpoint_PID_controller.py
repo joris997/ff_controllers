@@ -80,7 +80,10 @@ class Thruster(Node):
         self.timer = self.create_timer(0.1, self.timer_callback)
 
         self.desired_odometry = VehicleOdometry()
-        self.desired_odometry.position = [0.5, 0.5, 0.0]
+        self.desired_odometry.position = [0., 0., 0.0]
+        self.desired_odometry.q = [0., 0., 0., 0.]
+        self.desired_odometry.velocity = [0., 0., 0.]
+        self.desired_odometry.angular_velocity = [0., 0., 0.]
         
         
     def vehicle_status_callback(self, vehicle_status):
@@ -148,47 +151,49 @@ class Thruster(Node):
 
         if self.vehicle_status.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD:
             force, torque = self.compute_force_torque()
-
+            print(f"force: {force}")
             # fill in the message
             msg = VehicleThrustSetpoint()
-            print("force: ", force)
             msg.xyz = force.tolist()
-            # publish it
             self.thrust_pub.publish(msg)
-            self.get_logger().info(f"Publishing thrust: {msg.xyz}")
+            # self.get_logger().info(f"Publishing thrust: {msg.xyz}")
 
             msg = VehicleTorqueSetpoint()
             msg.xyz = torque.tolist()
             self.torque_pub.publish(msg)
-            self.get_logger().info(f"Publishing torque: {msg.xyz}")
+            # self.get_logger().info(f"Publishing torque: {msg.xyz}")
 
         if self.offboard_setpoint_counter < 11:
             self.offboard_setpoint_counter += 1
 
     def compute_force_torque(self):
         # actual
-        x = np.array([self.vehicle_odometry.position])
+        x = np.array(self.vehicle_odometry.position)
         q = quaternion_to_euler(self.vehicle_odometry.q)
-        dx = np.array([self.vehicle_odometry.velocity])
-        dq = np.array([self.vehicle_odometry.angular_velocity])
+        dx = np.array(self.vehicle_odometry.velocity)
+        dq = np.array(self.vehicle_odometry.angular_velocity)
 
         # desired
-        x_des = np.array([self.desired_odometry.position])
+        x_des = np.array(self.desired_odometry.position)
         q_des = quaternion_to_euler(self.desired_odometry.q)
-        dx_des = np.array([self.desired_odometry.velocity])
-        dq_des = np.array([self.desired_odometry.angular_velocity])
+        dx_des = np.array(self.desired_odometry.velocity)
+        dq_des = np.array(self.desired_odometry.angular_velocity)
 
         # PD terms
-        Px = 0.01
+        Px = 0.1
         Dx = 0.1
 
         Pq = 1
         Dq = 0.1
 
-        force = Px*(x_des - x) + Dx*(dx_des - dx)
+        force = -Px*(x - x_des) - Dx*(dx - dx_des)
         torque = Pq*(q_des - q) + Dq*(dq_des - dq)
+        print(f"error: {x_des - x}")
 
-        return force.flatten(), np.array([0.0,0.0,0.0])# torque.flatten()
+        force[2] = 0.0
+        torque[0:2] = np.zeros((2,))
+
+        return force, np.array([0.0,0.0,0.0])# torque.flatten()
 
 def main(args=None) -> None:
     print("Starting manual control node...")
