@@ -22,7 +22,8 @@ setup(
         'console_scripts': [
             'listener = ff_test_controllers.listener:main',
             'waypoint_planner = ff_test_controllers.waypoint_planner:main',
-            'thruster = ff_test_controllers.thruster:main'
+            'thruster = ff_test_controllers.thruster:main',
+            'setpoint_PID_controller = ff_test_controllers.setpoint_PID_controller:main'
         ],
     },
 )

@@ -10,6 +10,31 @@ from px4_msgs.msg import OffboardControlMode, TrajectorySetpoint, VehicleCommand
     VehicleLocalPosition, VehicleStatus, VehicleThrustSetpoint, VehicleOdometry, \
     VehicleTorqueSetpoint
 
+def quaternion_to_euler(quaternion):
+    """
+    Convert a quaternion into euler angles (roll, pitch, yaw)
+    roll is rotation around x in radians (counterclockwise)
+    pitch is rotation around y in radians (counterclockwise)
+    yaw is rotation around z in radians (counterclockwise)
+    """
+    x, y, z, w = quaternion[0], quaternion[1], quaternion[2], quaternion[3]
+    t0 = +2.0 * (w * x + y * z)
+    t1 = +1.0 - 2.0 * (x * x + y * y)
+    roll_x = math.atan2(t0, t1)
+    
+    t2 = +2.0 * (w * y - z * x)
+    t2 = +1.0 if t2 > +1.0 else t2
+    t2 = -1.0 if t2 < -1.0 else t2
+    pitch_y = math.asin(t2)
+    
+    t3 = +2.0 * (w * z + x * y)
+    t4 = +1.0 - 2.0 * (y * y + z * z)
+    yaw_z = math.atan2(t3, t4)
+    
+    return np.array([roll_x, pitch_y, yaw_z])
+
+
+
 class Thruster(Node):
     def __init__(self):
         super().__init__('thruster')
@@ -54,13 +79,9 @@ class Thruster(Node):
         # Timer for commands being sent
         self.timer = self.create_timer(0.1, self.timer_callback)
 
-        self.t0 = self.get_clock().now().nanoseconds
-        self.wp_times = np.array([0,10,20,30,40])
-        self.wps = np.array([[0,0,0],
-                             [-5,0,0],
-                             [5,5,0],
-                             [0,-5,0],
-                             [0,0,0]],dtype=float)
+        self.desired_odometry = VehicleOdometry()
+        self.desired_odometry.position = [0.5, 0.5, 0.0]
+        
         
     def vehicle_status_callback(self, vehicle_status):
         """Callback function for vehicle_status topic subscriber."""
@@ -126,25 +147,48 @@ class Thruster(Node):
             self.arm()
 
         if self.vehicle_status.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD:
-            ti = self.get_clock().now().nanoseconds
-            dt = (ti - self.t0) * 1e-9
-            wp_idx = np.searchsorted(self.wp_times, dt, side='right') - 1
+            force, torque = self.compute_force_torque()
 
             # fill in the message
             msg = VehicleThrustSetpoint()
-            msg.xyz = self.wps[wp_idx][0:3].tolist()
+            print("force: ", force)
+            msg.xyz = force.tolist()
             # publish it
             self.thrust_pub.publish(msg)
-            self.get_logger().info(f"Publishing thrust: {self.wps[wp_idx]}")
+            self.get_logger().info(f"Publishing thrust: {msg.xyz}")
 
             msg = VehicleTorqueSetpoint()
-            msg.xyz = [0.0, 0.0, 0.0]#np.zeros((3,1),dtype=float).tolist()
+            msg.xyz = torque.tolist()
             self.torque_pub.publish(msg)
             self.get_logger().info(f"Publishing torque: {msg.xyz}")
 
         if self.offboard_setpoint_counter < 11:
             self.offboard_setpoint_counter += 1
 
+    def compute_force_torque(self):
+        # actual
+        x = np.array([self.vehicle_odometry.position])
+        q = quaternion_to_euler(self.vehicle_odometry.q)
+        dx = np.array([self.vehicle_odometry.velocity])
+        dq = np.array([self.vehicle_odometry.angular_velocity])
+
+        # desired
+        x_des = np.array([self.desired_odometry.position])
+        q_des = quaternion_to_euler(self.desired_odometry.q)
+        dx_des = np.array([self.desired_odometry.velocity])
+        dq_des = np.array([self.desired_odometry.angular_velocity])
+
+        # PD terms
+        Px = 0.01
+        Dx = 0.1
+
+        Pq = 1
+        Dq = 0.1
+
+        force = Px*(x_des - x) + Dx*(dx_des - dx)
+        torque = Pq*(q_des - q) + Dq*(dq_des - dq)
+
+        return force.flatten(), np.array([0.0,0.0,0.0])# torque.flatten()
 
 def main(args=None) -> None:
     print("Starting manual control node...")
