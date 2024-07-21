@@ -10,29 +10,33 @@ from px4_msgs.msg import OffboardControlMode, TrajectorySetpoint, VehicleCommand
     VehicleLocalPosition, VehicleStatus, VehicleThrustSetpoint, VehicleOdometry, \
     VehicleTorqueSetpoint
 
-def quaternion_to_euler(quaternion):
-    """
-    Convert a quaternion into euler angles (roll, pitch, yaw)
-    roll is rotation around x in radians (counterclockwise)
-    pitch is rotation around y in radians (counterclockwise)
-    yaw is rotation around z in radians (counterclockwise)
-    """
-    x, y, z, w = quaternion[0], quaternion[1], quaternion[2], quaternion[3]
-    t0 = +2.0 * (w * x + y * z)
-    t1 = +1.0 - 2.0 * (x * x + y * y)
-    roll_x = math.atan2(t0, t1)
-    
-    t2 = +2.0 * (w * y - z * x)
-    t2 = +1.0 if t2 > +1.0 else t2
-    t2 = -1.0 if t2 < -1.0 else t2
-    pitch_y = math.asin(t2)
-    
-    t3 = +2.0 * (w * z + x * y)
-    t4 = +1.0 - 2.0 * (y * y + z * z)
-    yaw_z = math.atan2(t3, t4)
-    
-    return np.array([roll_x, pitch_y, yaw_z])
+from tf2_ros.transform_listener import TransformListener
+from tf2_ros.buffer import Buffer
+from tf2_ros import LookupException
+import tf_transformations as tf_trans
 
+# def quaternion_to_euler(quaternion):
+#     """
+#     Convert a quaternion into euler angles (roll, pitch, yaw)
+#     roll is rotation around x in radians (counterclockwise)
+#     pitch is rotation around y in radians (counterclockwise)
+#     yaw is rotation around z in radians (counterclockwise)
+#     """
+#     x, y, z, w = quaternion[0], quaternion[1], quaternion[2], quaternion[3]
+#     t0 = +2.0 * (w * x + y * z)
+#     t1 = +1.0 - 2.0 * (x * x + y * y)
+#     roll_x = math.atan2(t0, t1)
+    
+#     t2 = +2.0 * (w * y - z * x)
+#     t2 = +1.0 if t2 > +1.0 else t2
+#     t2 = -1.0 if t2 < -1.0 else t2
+#     pitch_y = math.asin(t2)
+    
+#     t3 = +2.0 * (w * z + x * y)
+#     t4 = +1.0 - 2.0 * (y * y + z * z)
+#     yaw_z = math.atan2(t3, t4)
+    
+#     return np.array([roll_x, pitch_y, yaw_z])
 
 
 class Thruster(Node):
@@ -71,6 +75,10 @@ class Thruster(Node):
                                                            self.vehicle_status_callback,
                                                            qos_profile)
         
+        # tf
+        self.tf_buffer = Buffer()
+        self.tf_sub = TransformListener(self.tf_buffer, self)
+
         # Initialize variables
         self.vehicle_odometry = VehicleOdometry()
         self.vehicle_status = VehicleStatus()
@@ -80,7 +88,7 @@ class Thruster(Node):
         self.timer = self.create_timer(0.1, self.timer_callback)
 
         self.desired_odometry = VehicleOdometry()
-        self.desired_odometry.position = [0., 0., 0.0]
+        self.desired_odometry.position = [0.5, 0., 0.0]
         self.desired_odometry.q = [0., 0., 0., 0.]
         self.desired_odometry.velocity = [0., 0., 0.]
         self.desired_odometry.angular_velocity = [0., 0., 0.]
@@ -152,6 +160,7 @@ class Thruster(Node):
         if self.vehicle_status.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD:
             force, torque = self.compute_force_torque()
             print(f"force: {force}")
+            force, torque = self.tf_robot_to_world(force,torque)
             # fill in the message
             msg = VehicleThrustSetpoint()
             msg.xyz = force.tolist()
@@ -167,15 +176,17 @@ class Thruster(Node):
             self.offboard_setpoint_counter += 1
 
     def compute_force_torque(self):
+        # Desired force and torque are computed in the robot frame!
+
         # actual
         x = np.array(self.vehicle_odometry.position)
-        q = quaternion_to_euler(self.vehicle_odometry.q)
+        q = np.array(tf_trans.euler_from_quaternion(self.vehicle_odometry.q.tolist()))
         dx = np.array(self.vehicle_odometry.velocity)
         dq = np.array(self.vehicle_odometry.angular_velocity)
 
         # desired
         x_des = np.array(self.desired_odometry.position)
-        q_des = quaternion_to_euler(self.desired_odometry.q)
+        q_des = np.array(tf_trans.euler_from_quaternion(self.desired_odometry.q.tolist()))
         dx_des = np.array(self.desired_odometry.velocity)
         dq_des = np.array(self.desired_odometry.angular_velocity)
 
@@ -183,18 +194,47 @@ class Thruster(Node):
         Px = 0.1
         Dx = 10
 
-        Pq = 1
+        Pq = 0.01
         Dq = 0.1
 
         force = -Px*(x - x_des) - Dx*(dx - dx_des)
         torque = -Pq*(q - q_des) - Dq*(dq - dq_des)
         print(f"error: {x - x_des}")
+        print(f"q:     {q}")
 
         force[2] = 0.0
         force[0], force[1] = force[1], -force[0]
+        torque[2] = torque[0]
         torque[0:2] = np.zeros((2,))
 
-        return force, np.array([0.0,0.0,0.0])# torque.flatten()
+        return force, torque#np.array([0.0,0.0,0.0])# torque.flatten()
+
+    def tf_robot_to_world(self,force,torque):
+        # Convert desired force and torque from robot frame to world frame!
+        # order is "target frame", "source frame", transformation is 
+        trans = self.tf_buffer.lookup_transform("world","snap",rclpy.time.Time())
+
+        translation = [trans.transform.translation.x,
+                       trans.transform.translation.y,
+                       trans.transform.translation.z]
+        rotation = tf_trans.quaternion_matrix([trans.transform.rotation.x,
+                                                trans.transform.rotation.y,
+                                                trans.transform.rotation.z,
+                                                trans.transform.rotation.w])
+
+        trans_force = np.dot(rotation[:3,:3],force)
+        trans_torque = np.dot(rotation[:3,:3],torque)
+        return force, torque
+        # # Transform force
+        # transformed_force = tf_trans.quaternion_multiply(
+        #     tf_trans.quaternion_multiply(rotation, force),
+        #     tf_trans.quaternion_conjugate(rotation))
+
+        # # Transform torque
+        # transformed_torque = tf_trans.quaternion_multiply(
+        #     tf_trans.quaternion_multiply(rotation, torque),
+        #     tf_trans.quaternion_conjugate(rotation))
+
 
 def main(args=None) -> None:
     print("Starting manual control node...")
