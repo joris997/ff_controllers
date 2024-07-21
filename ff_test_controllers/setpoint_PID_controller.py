@@ -181,16 +181,17 @@ class Thruster(Node):
 
         # PD terms
         Px = 0.1
-        Dx = 0.1
+        Dx = 10
 
         Pq = 1
         Dq = 0.1
 
         force = -Px*(x - x_des) - Dx*(dx - dx_des)
-        torque = Pq*(q_des - q) + Dq*(dq_des - dq)
-        print(f"error: {x_des - x}")
+        torque = -Pq*(q - q_des) - Dq*(dq - dq_des)
+        print(f"error: {x - x_des}")
 
         force[2] = 0.0
+        force[0], force[1] = force[1], -force[0]
         torque[0:2] = np.zeros((2,))
 
         return force, np.array([0.0,0.0,0.0])# torque.flatten()
