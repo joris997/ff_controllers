@@ -27,6 +27,7 @@ setup(
             'waypoint_planner = ff_test_controllers.waypoint_planner:main',
             'thruster = ff_test_controllers.thruster:main',
             'setpoint_PID_controller = ff_test_controllers.setpoint_PID_controller:main',
+            'manual_controller = ff_test_controllers.manual_controller:main',
 
             'ff_tf2_broadcaster = ff_test_controllers.ff_tf2_broadcaster:main'
         ],

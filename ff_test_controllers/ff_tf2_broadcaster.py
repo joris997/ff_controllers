@@ -30,34 +30,6 @@ from px4_msgs.msg import OffboardControlMode, TrajectorySetpoint, VehicleCommand
     VehicleLocalPosition, VehicleStatus, VehicleThrustSetpoint, VehicleOdometry, \
     VehicleTorqueSetpoint
 
-# This function is a stripped down version of the code in
-# https://github.com/matthew-brett/transforms3d/blob/f185e866ecccb66c545559bc9f2e19cb5025e0ab/transforms3d/euler.py
-# Besides simplifying it, this version also inverts the order to return x,y,z,w, which is
-# the way that ROS prefers it.
-def quaternion_from_euler(ai, aj, ak):
-    ai /= 2.0
-    aj /= 2.0
-    ak /= 2.0
-    ci = math.cos(ai)
-    si = math.sin(ai)
-    cj = math.cos(aj)
-    sj = math.sin(aj)
-    ck = math.cos(ak)
-    sk = math.sin(ak)
-    cc = ci*ck
-    cs = ci*sk
-    sc = si*ck
-    ss = si*sk
-
-    q = np.empty((4, ))
-    q[0] = cj*sc - sj*cs
-    q[1] = cj*ss + sj*cc
-    q[2] = cj*cs - sj*sc
-    q[3] = cj*cc + sj*ss
-
-    return q
-
-
 class FrameBroadcaster(Node):
 
     def __init__(self):
@@ -74,10 +46,9 @@ class FrameBroadcaster(Node):
         # Initialize the transform broadcaster
         self.tf_broadcaster = TransformBroadcaster(self)
 
-        self.ff_name = self.declare_parameter(
-            'ff_name', 'snap').get_parameter_value().string_value
+        self.ff_name = self.declare_parameter('ff_name', 'snap').get_parameter_value().string_value
 
-        # Subscribe to a turtle{1}{2}/pose topic and call handle_ff_pose
+        # Subscribe to a odometry topic and call handle_ff_pose
         # callback function on each message
         self.subscription = self.create_subscription(
             VehicleOdometry,
@@ -92,7 +63,7 @@ class FrameBroadcaster(Node):
         # Read message content and assign it to
         # corresponding tf variables
         t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = 'world'
+        t.header.frame_id = 'map'
         t.child_frame_id = self.ff_name
 
         # Turtle only exists in 2D, thus we get x and y translation

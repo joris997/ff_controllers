@@ -2,6 +2,11 @@
 
 import math
 import numpy as np
+import sys
+import select
+import termios
+import tty
+import threading
 
 import rclpy
 from rclpy.node import Node
@@ -9,7 +14,6 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from px4_msgs.msg import OffboardControlMode, TrajectorySetpoint, VehicleCommand, \
     VehicleLocalPosition, VehicleStatus, VehicleThrustSetpoint, VehicleOdometry, \
     VehicleTorqueSetpoint, VehicleAttitude, VehicleLocalPosition
-from mpc_msgs.srv import SetPose
 
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros.buffer import Buffer
@@ -40,7 +44,7 @@ import tf_transformations as tf_trans
 #     return np.array([roll_x, pitch_y, yaw_z])
 
 
-class Thruster(Node):
+class ManualController(Node):
     def __init__(self):
         super().__init__('thruster')
 
@@ -84,12 +88,8 @@ class Thruster(Node):
                                                            self.vehicle_local_position_callback,
                                                            qos_profile)
 
-        # Services
-        self.set_pose_srv = self.create_service(SetPose, '/set_pose', self.add_set_pos_callback)
-
-        # tf
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        # # Services
+        # self.set_pose_srv = self.create_service(SetPose, '/set_pose', self.add_set_pos_callback)
 
         # Initialize variables
         self.vehicle_odometry = VehicleOdometry()
@@ -97,19 +97,28 @@ class Thruster(Node):
         self.vehicle_local_position = np.array([0.0, 0.0, 0.0])
         self.vehicle_local_velocity = np.array([0.0, 0.0, 0.0])
 
+        # keyboard controller
+        self.thrust = [0.0, 0.0, 0.0]
+        self.torque = [0.0, 0.0, 0.0]
+        self.step = 0.1
+
+        self.settings = termios.tcgetattr(sys.stdin)
+        tty.setcbreak(sys.stdin.fileno())
+        self.key_mapping = {
+            'q': (0, self.step), 'a': (0, -self.step),
+            'w': (1, self.step), 's': (1, -self.step),
+            'e': (2, self.step), 'd': (2, -self.step),
+            'r': (0, self.step), 'f': (0, -self.step),
+            't': (1, self.step), 'g': (1, -self.step),
+            'y': (2, self.step), 'h': (2, -self.step)
+        }
+        self.thread = threading.Thread(target=self.keyboard_listener)
+        self.thread.start()
+
+        # main loop
         self.vehicle_status = VehicleStatus()
         self.offboard_setpoint_counter = 0
-
-        # Timer for commands being sent
         self.timer = self.create_timer(0.1, self.timer_callback)
-
-        self.desired_odometry = VehicleOdometry()
-        self.desired_odometry.position = [0., 0., 0.]
-        self.desired_odometry.q = [0., 0., 0., 0.]
-        self.desired_odometry.velocity = [0., 0., 0.]
-        self.desired_odometry.angular_velocity = [0., 0., 0.]
-
-        
         
     def vehicle_status_callback(self, vehicle_status):
         """Callback function for vehicle_status topic subscriber."""
@@ -195,89 +204,43 @@ class Thruster(Node):
             self.arm()
 
         if self.vehicle_status.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD:
-            force_world, torque_world = self.compute_force_torque()
-            force_body, torque_body = self.convert_to_body_frame(force_world,torque_world)
-            # print type of force_body and torque_body
-            print(f"force_body: {force_body}"
-                  f"torque_body: {torque_body}")
-            print(f"force_body type: {type(force_body)}")
-            print(f"torque_body type: {type(torque_body)}")
-
+            # convert thrust and torque from body frame to world frame
             msg = VehicleThrustSetpoint()
             msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
-            msg.xyz[0] = force_body[0]
-            msg.xyz[1] = force_body[1]
-            msg.xyz[2] = force_body[2]
+            msg.xyz = self.thrust
             self.thrust_pub.publish(msg)
-            # self.get_logger().info(f"Publishing thrust: {msg.xyz}")
 
             msg = VehicleTorqueSetpoint()
             msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
-            msg.xyz[0] = torque_body[0]
-            msg.xyz[1] = torque_body[1]
-            msg.xyz[2] = torque_body[2]
+            msg.xyz = self.torque
             self.torque_pub.publish(msg)
-            # self.get_logger().info(f"Publishing torque: {msg.xyz}")
+
+            print("Thrust: ", self.thrust)
 
         if self.offboard_setpoint_counter < 11:
             self.offboard_setpoint_counter += 1
 
-    def compute_force_torque(self):
-        # Desired force and torque are computed in the robot frame!
-
-        # actual
-        x = self.vehicle_local_position
-        q = tf_trans.euler_from_quaternion(self.vehicle_attitude)
-        dx = self.vehicle_local_velocity
-        dq = np.array(self.vehicle_odometry.angular_velocity)
-
-        # desired
-        x_des = np.array(self.desired_odometry.position)
-        q_des = np.array(tf_trans.euler_from_quaternion(self.desired_odometry.q.tolist()))
-        dx_des = np.array(self.desired_odometry.velocity)
-        dq_des = np.array(self.desired_odometry.angular_velocity)
-
-        # PD terms
-        Px = 0.001
-        Dx = 0.01
-
-        Pq = 0.001
-        Dq = 0.01
-
-        force = -Px*(x - x_des) - Dx*(dx - dx_des)
-        torque = -Pq*(q - q_des) - Dq*(dq - dq_des)
-        print(f"error: {x - x_des}")
-        print(f"q:     {q}")
-
-        # force[2] = 0.0
-        force[0], force[1], force[2] = force[0], -force[1], -force[2]
-        # torque[2] = torque[0]
-        # torque[0:2] = np.zeros((2,))
-
-        return force, torque
-
-    def convert_to_body_frame(self, force, torque):
-        # Convert force and torque to body frame
-        t = self.tf_buffer.lookup_transform('snap', 'map', rclpy.time.Time())
-
-        translation = [t.transform.translation.x, t.transform.translation.y, t.transform.translation.z]
-        quaternion_matrix = tf_trans.quaternion_matrix([t.transform.rotation.x, t.transform.rotation.y, t.transform.rotation.z, t.transform.rotation.w])
-        rotation_matrix = quaternion_matrix[:3,:3]
-
-        t_force = np.dot(rotation_matrix, force)
-        t_torque = np.dot(rotation_matrix, torque)
-
-        return t_force, t_torque
-
-    def add_set_pos_callback(self, request, response):
-        self.desired_odometry.position = [request.pose.position.x, request.pose.position.y, request.pose.position.z]
-        return response
+    def keyboard_listener(self):
+        try:
+            while rclpy.ok():
+                if select.select([sys.stdin], [], [], 0.1)[0]:
+                    key = sys.stdin.read(1)
+                    if key in self.key_mapping:
+                        index, value = self.key_mapping[key]
+                        if key in 'qawsed':  # for thrust
+                            self.thrust[index] += value
+                        elif key in 'rftgyh':  # for torque
+                            self.torque[index] += value
+                        self.get_logger().info(f'Thrust: {self.thrust}, Torque: {self.torque}')
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.settings)
+            self.thread.join()
 
 
 def main(args=None) -> None:
     print("Starting manual control node...")
     rclpy.init(args=args)
-    node = Thruster()
+    node = ManualController()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
