@@ -33,7 +33,7 @@ from px4_msgs.msg import OffboardControlMode, TrajectorySetpoint, VehicleCommand
 class FrameBroadcaster(Node):
 
     def __init__(self):
-        super().__init__('ff_tf2_frame_publisher')
+        super().__init__('tf2_frame_publisher')
 
         # Configure QoS profile for publishing and subscribing
         qos_profile = QoSProfile(
@@ -75,10 +75,10 @@ class FrameBroadcaster(Node):
         # For the same reason, turtle can only rotate around one axis
         # and this why we set rotation in x and y to 0 and obtain
         # rotation in z axis from the message
-        t.transform.rotation.x = float(msg.q[0])
-        t.transform.rotation.y = float(msg.q[1])
-        t.transform.rotation.z = float(msg.q[2])
-        t.transform.rotation.w = float(msg.q[3])
+        t.transform.rotation.x = float(msg.q[1])
+        t.transform.rotation.y = float(msg.q[2])
+        t.transform.rotation.z = float(msg.q[3])
+        t.transform.rotation.w = float(msg.q[0])
 
         # Send the transformation
         self.tf_broadcaster.sendTransform(t)

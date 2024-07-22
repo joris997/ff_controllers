@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 import os 
 from glob import glob
 
-package_name = 'ff_test_controllers'
+package_name = 'ff_controllers'
 
 setup(
     name=package_name,
@@ -22,14 +22,10 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            # 'python_executable_name = pkg_name.python_executable_name:main',
-            
-            'waypoint_planner = ff_test_controllers.waypoint_planner:main',
-            'thruster = ff_test_controllers.thruster:main',
-            'setpoint_PID_controller = ff_test_controllers.setpoint_PID_controller:main',
-            'manual_controller = ff_test_controllers.manual_controller:main',
+            'PID_controller = ff_controllers.PID_controller:main',
+            'manual_controller = ff_controllers.manual_controller:main',
 
-            'ff_tf2_broadcaster = ff_test_controllers.ff_tf2_broadcaster:main'
+            'tf2_broadcaster = ff_controllers.tf2_broadcaster:main'
         ],
     },
 )

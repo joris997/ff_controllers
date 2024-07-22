@@ -1,3 +1,3 @@
-# ff_test_controllers
+# ff_controllers
 `colcon build`
-`ros2 run ff_test_controllers thruster`
+`ros2 run ff_controllers thruster`

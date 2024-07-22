@@ -40,7 +40,7 @@ import tf_transformations as tf_trans
 #     return np.array([roll_x, pitch_y, yaw_z])
 
 
-class Thruster(Node):
+class PID_controller(Node):
     def __init__(self):
         super().__init__('thruster')
 
@@ -75,14 +75,6 @@ class Thruster(Node):
                                                            '/fmu/out/vehicle_status',
                                                            self.vehicle_status_callback,
                                                            qos_profile)
-        self.attitude_sub = self.create_subscription(VehicleAttitude,
-                                                     '/fmu/out/vehicle_attitude',
-                                                     self.vehicle_attitude_callback,
-                                                     qos_profile)
-        self.local_position_sub = self.create_subscription(VehicleLocalPosition,
-                                                           '/fmu/out/vehicle_local_position',
-                                                           self.vehicle_local_position_callback,
-                                                           qos_profile)
 
         # Services
         self.set_pose_srv = self.create_service(SetPose, '/set_pose', self.add_set_pos_callback)
@@ -93,7 +85,7 @@ class Thruster(Node):
 
         # Initialize variables
         self.vehicle_odometry = VehicleOdometry()
-        self.vehicle_attitude = np.array([1.0, 0.0, 0.0, 0.0])
+        self.vehicle_attitude = np.array([0.0, 0.0, 0.0, 0.0])
         self.vehicle_local_position = np.array([0.0, 0.0, 0.0])
         self.vehicle_local_velocity = np.array([0.0, 0.0, 0.0])
 
@@ -118,23 +110,6 @@ class Thruster(Node):
     def vehicle_odometry_callback(self, vehicle_odometry):
         """Callback function for vehicle_odometry topic subscriber."""
         self.vehicle_odometry = vehicle_odometry
-
-    def vehicle_attitude_callback(self, msg):
-        # TODO: handle NED->ENU transformation
-        self.vehicle_attitude[0] = msg.q[0]
-        self.vehicle_attitude[1] = msg.q[1]
-        self.vehicle_attitude[2] = -msg.q[2]
-        self.vehicle_attitude[3] = -msg.q[3]
-
-    def vehicle_local_position_callback(self, msg):
-        # TODO: handle NED->ENU transformation
-        self.vehicle_local_position[0] = msg.x
-        self.vehicle_local_position[1] = -msg.y
-        self.vehicle_local_position[2] = -msg.z
-        self.vehicle_local_velocity[0] = msg.vx
-        self.vehicle_local_velocity[1] = -msg.vy
-        self.vehicle_local_velocity[2] = -msg.vz
-
 
 
     def arm(self):
@@ -185,7 +160,6 @@ class Thruster(Node):
         self.vehicle_command_pub.publish(msg)
 
 
-
     def timer_callback(self):
         """Callback function for the timer."""
         self.publish_offboard_control_heartbeat_signal()
@@ -200,8 +174,6 @@ class Thruster(Node):
             # print type of force_body and torque_body
             print(f"force_body: {force_body}"
                   f"torque_body: {torque_body}")
-            print(f"force_body type: {type(force_body)}")
-            print(f"torque_body type: {type(torque_body)}")
 
             msg = VehicleThrustSetpoint()
             msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
@@ -226,9 +198,9 @@ class Thruster(Node):
         # Desired force and torque are computed in the robot frame!
 
         # actual
-        x = self.vehicle_local_position
-        q = tf_trans.euler_from_quaternion(self.vehicle_attitude)
-        dx = self.vehicle_local_velocity
+        x = np.array(self.vehicle_odometry.position)
+        q = tf_trans.euler_from_quaternion(self.vehicle_odometry.q.tolist())
+        dx = np.array(self.vehicle_odometry.velocity)
         dq = np.array(self.vehicle_odometry.angular_velocity)
 
         # desired
@@ -238,19 +210,22 @@ class Thruster(Node):
         dq_des = np.array(self.desired_odometry.angular_velocity)
 
         # PD terms
-        Px = 0.001
-        Dx = 0.01
+        Px = .1
+        Dx = 1
 
-        Pq = 0.001
-        Dq = 0.01
+        Pq = .1
+        Dq = 1
 
         force = -Px*(x - x_des) - Dx*(dx - dx_des)
         torque = -Pq*(q - q_des) - Dq*(dq - dq_des)
-        print(f"error: {x - x_des}")
-        print(f"q:     {q}")
+        print(f"x error: {x - x_des}")
+        print(f"dx error: {dx - dx_des}")
+        print("---")
+        print(f"q error: {q - q_des}")
+        print(f"dq error: {dq - dq_des}")
 
         # force[2] = 0.0
-        force[0], force[1], force[2] = force[0], -force[1], -force[2]
+        force[0], force[1], force[2] = force[0], force[1], force[2]
         # torque[2] = torque[0]
         # torque[0:2] = np.zeros((2,))
 
