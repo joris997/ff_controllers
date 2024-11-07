@@ -11,7 +11,7 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages',['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name), glob('launch/*.launch.py'))
+        (os.path.join('share', package_name), glob(os.path.join('ff_controllers/launch', '*launch.[pxy][yma]*')))
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,9 +22,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'PID_controller = ff_controllers.PID_controller:main',
-            'manual_controller = ff_controllers.manual_controller:main',
-
+            'ff_controller = ff_controllers.ff_controller:main',
             'tf2_broadcaster = ff_controllers.tf2_broadcaster:main'
         ],
     },
